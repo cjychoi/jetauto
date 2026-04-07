@@ -22,6 +22,35 @@ class FaceRegistration:
         self.face_handler = FaceRecognitionHandler()
         self.face_handler.load_face_recognition(device_id=0)  # Use GPU
         
+    def try_register_frame(self, image, person_name):
+        """
+        Detect a single face in a BGR image, save crop, append embedding to DB.
+
+        Returns:
+            (success: bool, message: str) — message is for logging on failure.
+        """
+        if image is None:
+            return False, "empty frame"
+        faces = self.face_handler.face_app.get(image)
+        if len(faces) == 0:
+            return False, "no face detected"
+        if len(faces) > 1:
+            return False, f"multiple faces ({len(faces)})"
+        face = faces[0]
+        face_bbox = face.bbox.astype(int)
+        x1, y1, x2, y2 = face_bbox
+        face_width = x2 - x1
+        face_height = y2 - y1
+        if face_width < FACE_MIN_SIZE_RT[0] or face_height < FACE_MIN_SIZE_RT[1]:
+            return False, f"face too small ({face_width}x{face_height})"
+        face_crop_path = self.face_handler.save_face_image(face_bbox, image, person_name)
+        if not face_crop_path:
+            return False, "failed to save face crop"
+        embedding = face.embedding.flatten() if hasattr(face.embedding, 'flatten') else face.embedding
+        if self.face_handler.add_embedding_to_database(person_name, embedding):
+            return True, "ok"
+        return False, "failed to add embedding to database"
+
     def register_from_images(self, image_paths, person_name):
         """
         Register a new person from multiple images (recommended for better accuracy)
@@ -44,42 +73,12 @@ class FaceRegistration:
                 print("Failed to load image")
                 continue
             
-            # Detect faces
-            faces = self.face_handler.face_app.get(image)
-            
-            if len(faces) == 0:
-                print("No faces detected in image")
-                continue
-            
-            if len(faces) > 1:
-                print(f"Multiple faces detected ({len(faces)}). Skipping this image.")
-                continue
-            
-            # Get the face
-            face = faces[0]
-            face_bbox = face.bbox.astype(int)
-            x1, y1, x2, y2 = face_bbox
-            
-            face_width = x2 - x1
-            face_height = y2 - y1
-            
-            if face_width < FACE_MIN_SIZE_RT[0] or face_height < FACE_MIN_SIZE_RT[1]:
-                print(f"Face too small: {face_width}x{face_height}")
-                continue
-            
-            # Save face crop
-            face_crop_path = self.face_handler.save_face_image(face_bbox, image, person_name)
-            if not face_crop_path:
-                print("Failed to save face crop")
-                continue
-            
-            # Add embedding to database
-            embedding = face.embedding.flatten() if hasattr(face.embedding, 'flatten') else face.embedding
-            if self.face_handler.add_embedding_to_database(person_name, embedding):
+            ok, msg = self.try_register_frame(image, person_name)
+            if ok:
                 successful_registrations += 1
                 print(f"Successfully registered face {successful_registrations} for {person_name}")
             else:
-                print("Failed to add embedding to database")
+                print(msg)
         
         if successful_registrations > 0:
             print(f"Successfully registered {person_name} with {successful_registrations} face embeddings")
