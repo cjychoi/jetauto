@@ -4,6 +4,16 @@ Real-time Face Recognition ROS Node
 Subscribes to robot camera and publishes face recognition results
 """
 
+import warnings
+
+# InsightFace calls np.linalg.lstsq; NumPy emits FutureWarning per call. If that runs
+# every frame, stderr spam can noticeably slow the node.
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    message=r".*rcond.*",
+)
+
 import rospy
 import numpy as np
 from sensor_msgs.msg import Image, CompressedImage

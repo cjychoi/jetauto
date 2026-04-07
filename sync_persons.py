@@ -25,14 +25,30 @@ def sync_persons_to_node_sets(
     script_dir = os.path.dirname(os.path.abspath(__file__))
     face_data_path = os.path.join(script_dir, face_data_dir)
     node_sets_file = os.path.join(script_dir, node_sets_path)
-    
+
+    # Face crops live here; embeddings may exist only in face_db.json. Missing folder is normal.
     if not os.path.exists(face_data_path):
-        logger.error(f"Face data directory not found: {face_data_path}")
-        return False
-    
+        try:
+            os.makedirs(face_data_path, exist_ok=True)
+            logger.info(
+                "Created empty face data directory (no crops yet): %s",
+                face_data_path,
+            )
+        except OSError as e:
+            logger.warning("Could not create face data directory %s: %s", face_data_path, e)
+            return False
+        logger.info(
+            "Skipping node_sets sync: no person subfolders under %s yet.",
+            face_data_path,
+        )
+        return True
+
     if not os.path.exists(node_sets_file):
-        logger.error(f"node_sets.json not found: {node_sets_file}")
-        return False
+        logger.info(
+            "node_sets.json not found at %s; skipping sync (face recognition still works).",
+            node_sets_file,
+        )
+        return True
     
     try:
         person_names = []
