@@ -8,7 +8,6 @@ import rospy
 import numpy as np
 from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import String
-from cv_bridge import CvBridge
 import cv2
 import sys
 import os
@@ -19,12 +18,30 @@ sys.path.append('/face_standalone-main')
 from face_recognition import FaceRecognitionHandler
 from config import FACE_MIN_SIZE_RT
 
+
+def compressed_imgmsg_to_bgr(msg):
+    """Decode CompressedImage without cv_bridge (avoids PyInit_cv_bridge_boost ABI mismatches)."""
+    buf = np.frombuffer(msg.data, dtype=np.uint8)
+    bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    return bgr
+
+
+def bgr_to_imgmsg(bgr, header=None, encoding="bgr8"):
+    """Build sensor_msgs/Image from BGR ndarray without cv_bridge."""
+    out = Image()
+    if header is not None:
+        out.header = header
+    out.height, out.width = bgr.shape[:2]
+    out.encoding = encoding
+    out.is_bigendian = 0
+    out.step = bgr.shape[1] * 3
+    out.data = bgr.tobytes()
+    return out
+
+
 class RealTimeFaceNode:
     def __init__(self):
         rospy.init_node('real_time_face_recognition', anonymous=True)
-        
-        # Setup CV bridge
-        self.bridge = CvBridge()
         
         # Initialize face recognition
         rospy.loginfo("Initializing face recognition...")
@@ -53,8 +70,11 @@ class RealTimeFaceNode:
     
     def image_callback(self, msg):
         try:
-            # Convert compressed ROS Image to OpenCV
-            cv_image = self.bridge.compressed_imgmsg_to_cv2(msg, "bgr8")
+            # Convert compressed ROS Image to OpenCV (no cv_bridge)
+            cv_image = compressed_imgmsg_to_bgr(msg)
+            if cv_image is None:
+                rospy.logwarn_throttle(5.0, "compressed image decode failed (cv2.imdecode returned None)")
+                return
             
             # Process frame for faces
             recognized_names = self.recognize_faces(cv_image)
@@ -73,7 +93,7 @@ class RealTimeFaceNode:
             
             # Publish debug image with bounding boxes (optional)
             debug_image = self.draw_face_boxes(cv_image, recognized_names)
-            debug_msg = self.bridge.cv2_to_imgmsg(debug_image, "bgr8")
+            debug_msg = bgr_to_imgmsg(debug_image, header=msg.header)
             self.debug_pub.publish(debug_msg)
             
         except Exception as e:
