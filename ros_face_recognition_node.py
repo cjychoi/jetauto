@@ -80,93 +80,79 @@ class RealTimeFaceNode:
     
     def image_callback(self, msg):
         try:
-            # Convert compressed ROS Image to OpenCV (no cv_bridge)
             cv_image = compressed_imgmsg_to_bgr(msg)
             if cv_image is None:
                 rospy.logwarn_throttle(5.0, "compressed image decode failed (cv2.imdecode returned None)")
                 return
-            
-            # Process frame for faces
-            recognized_names = self.recognize_faces(cv_image)
-            
-            # Publish results
+
+            faces, recognized_names = self.recognize_faces(cv_image)
+
             result_str = f"{msg.header.stamp.to_sec()}: {', '.join(recognized_names) if recognized_names else 'No faces'}"
             self.results_pub.publish(result_str)
-            
-            # Performance tracking
+
+            if recognized_names:
+                rospy.loginfo_throttle(1.0, "Detected: %s", ", ".join(recognized_names))
+
             self.frame_count += 1
-            if self.frame_count % 30 == 0:  # Every 30 frames
+            if self.frame_count % 30 == 0:
                 current_time = rospy.Time.now()
-                fps = 30.0 / (current_time - self.last_time).to_sec()
-                rospy.loginfo(f"Processing FPS: {fps:.1f}")
+                elapsed = (current_time - self.last_time).to_sec()
+                if elapsed > 0:
+                    fps = 30.0 / elapsed
+                    rospy.loginfo(f"Processing FPS: {fps:.1f}")
                 self.last_time = current_time
-            
-            # Publish debug image with bounding boxes (optional)
-            debug_image = self.draw_face_boxes(cv_image, recognized_names)
-            debug_msg = bgr_to_imgmsg(debug_image, header=msg.header)
-            self.debug_pub.publish(debug_msg)
-            
+
+            if self.debug_pub.get_num_connections() > 0:
+                debug_image = self.draw_face_boxes(cv_image, faces, recognized_names)
+                debug_msg = bgr_to_imgmsg(debug_image, header=msg.header)
+                self.debug_pub.publish(debug_msg)
+
         except Exception as e:
             rospy.logerr(f"Error processing image: {e}")
-    
+
     def recognize_faces(self, frame):
-        """Recognize faces in frame using existing face_recognition.py logic"""
+        """Run InsightFace once, return (faces, names)."""
         try:
             faces = self.face_handler.face_app.get(frame)
-            
+
             if len(faces) == 0:
-                return []
-            
+                return [], []
+
             recognized_names = []
-            
-            for idx, face in enumerate(faces, 1):
+
+            for face in faces:
                 face_bbox = face.bbox.astype(int)
                 x1, y1, x2, y2 = face_bbox
-                
-                face_width = x2 - x1
-                face_height = y2 - y1
-                
-                # Skip small faces
-                if face_width < FACE_MIN_SIZE_RT[0] or face_height < FACE_MIN_SIZE_RT[1]:
+
+                if (x2 - x1) < FACE_MIN_SIZE_RT[0] or (y2 - y1) < FACE_MIN_SIZE_RT[1]:
                     continue
-                
+
                 try:
                     embedding = face.embedding.flatten() if hasattr(face.embedding, 'flatten') else face.embedding
                     name = self.face_handler.identify_face(embedding)
                 except Exception as e:
                     rospy.logdebug(f"Error identifying face: {e}")
                     name = None
-                
-                if name:
-                    recognized_names.append(name)
-                else:
-                    recognized_names.append("Unknown")
-            
-            return recognized_names
-            
+
+                recognized_names.append(name if name else "Unknown")
+
+            return faces, recognized_names
+
         except Exception as e:
             rospy.logerr(f"Error in face recognition: {e}")
-            return []
-    
-    def draw_face_boxes(self, frame, names):
-        """Draw bounding boxes and names on frame"""
+            return [], []
+
+    def draw_face_boxes(self, frame, faces, names):
+        """Draw bounding boxes and names — reuses already-detected faces (no second inference)."""
         try:
-            faces = self.face_handler.face_app.get(frame)
             result_frame = frame.copy()
-            
             for i, face in enumerate(faces):
                 if i < len(names):
                     bbox = face.bbox.astype(int)
                     x1, y1, x2, y2 = bbox
-                    
-                    # Draw rectangle
                     cv2.rectangle(result_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    
-                    # Draw name
-                    name = names[i]
-                    cv2.putText(result_frame, name, (x1, y1-10), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
+                    cv2.putText(result_frame, names[i], (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             return result_frame
         except:
             return frame
